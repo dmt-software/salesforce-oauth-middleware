@@ -1,5 +1,9 @@
 # Salesforce-OAuth-Middleware
 
+[![Build Status](https://travis-ci.org/dmt-software/salesforce-oauth-middleware.svg?branch=master)](https://travis-ci.org/dmt-software/salesforce-oauth-middleware)
+[![Scrutinizer Code Quality](https://scrutinizer-ci.com/g/dmt-software/salesforce-oauth-middleware/badges/quality-score.png?b=master)](https://scrutinizer-ci.com/g/dmt-software/salesforce-oauth-middleware/?branch=master)
+[![Code Coverage](https://scrutinizer-ci.com/g/dmt-software/salesforce-oauth-middleware/badges/coverage.png?b=master)](https://scrutinizer-ci.com/g/dmt-software/salesforce-oauth-middleware/?branch=master)
+
 This authorization middleware uses the OAuth `grant_type` [password](https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_understanding_username_password_oauth_flow.htm)
 to authenticate and authorize a request to the Salesforce REST API. 
 
