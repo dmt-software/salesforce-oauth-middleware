@@ -26,14 +26,13 @@ $oAuthProvider = new Salesforce(
          'redirectUri'       => 'https://localhost', // wont be visited for grant_type password
      ]
 );
+$authMiddleware = new AuthorizationMiddleware(
+  new SalesforceAuthorization($oAuthProvider, 'YourUsername', 'YourPasswordAmdSecret')
+);
 
 $stack = new HandlerStack();
 $stack->setHandler(new CurlHandler());
-$stack->push(Middleware::mapRequest(
-    new AuthorizationMiddleware(
-        new SalesforceAuthorization($oAuthProvider, 'YourUsername', 'YourPasswordAmdSecret')
-    )
-));
+$stack->push(Middleware::mapRequest($authMiddleware));
  
 $client = new Client([
     'handler' => $stack
@@ -42,7 +41,23 @@ $client = new Client([
 // request will be authorized and routed to your client (sub)domain according to the instance_url received from OAuth
 $response = $client->get('https://salesforce.com/services/data/v26.0/sobjects/Account');
 ```
-
 ## Cache
 
-@TODO
+To re-use an access token this middleware can be configured with a PSR-16 cache implementation.
+```php
+<?php
+ 
+use DMT\Salesforce\Auth\Authorization\SalesforceAuthorization;
+use DMT\Auth\AuthorizationMiddleware;
+use Psr\SimpleCache\CacheInterface;
+use Stevenmaguire\OAuth2\Client\Provider\Salesforce;
+ 
+/** @var Salesforce $oAuthProvider */
+/** @var CacheInterface $dataCache */
+$authMiddleware = new AuthorizationMiddleware(
+    new SalesforceAuthorization($oAuthProvider, 'YourUsername', 'YourPasswordAmdSecret', $dataCache)
+);
+``` 
+NOTE: Currently Salesforce does not provide an expiration time or refresh token when `grant_type` password is used.
+Cached access tokens will be recycled every hour (when handled by this middleware). 
+This might change later to better suit implementations (I'm open for suggestions).

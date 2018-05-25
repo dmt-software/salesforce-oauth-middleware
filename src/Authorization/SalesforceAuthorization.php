@@ -64,7 +64,8 @@ class SalesforceAuthorization implements AuthorizationInterface
      * @param RequestInterface $request
      *
      * @return RequestInterface
-     * @throws \RuntimeException
+     * @throws AuthorizationException
+     * @throws InvalidArgumentException
      */
     public function handle(RequestInterface $request): RequestInterface
     {
@@ -78,7 +79,9 @@ class SalesforceAuthorization implements AuthorizationInterface
             }
 
             return $request->withHeader('Authorization', sprintf('Bearer %s', $accessToken));
-        } catch (\Exception $exception) {
+        } catch (InvalidArgumentException $exception) {
+            throw $exception;
+        } catch (\Throwable $exception) {
             throw new AuthorizationException("Authentication failed: " . $exception->getMessage(), 0, $exception);
         }
     }
@@ -88,6 +91,7 @@ class SalesforceAuthorization implements AuthorizationInterface
      *
      * @return AccessToken
      * @throws IdentityProviderException
+     * @throws InvalidArgumentException
      * @throws \UnexpectedValueException
      */
     protected function fetchAccessToken(): AccessToken
@@ -95,13 +99,8 @@ class SalesforceAuthorization implements AuthorizationInterface
         /** @var AccessToken $accessToken */
         $accessToken = $this->provider->getAccessToken('password', $this->credentials);
 
-        try {
-            if ($this->cache !== null) {
-                $this->cache->set(static::CACHE_KEY, json_encode($accessToken), static::CACHE_TTL);
-            }
-        } catch (InvalidArgumentException $exception) {
-            // This will only occur when the cache key is not a legal value, proceed without cache
-            $this->cache = null;
+        if ($this->cache !== null) {
+            $this->cache->set(static::CACHE_KEY, json_encode($accessToken), static::CACHE_TTL);
         }
 
         return $accessToken;
@@ -111,6 +110,7 @@ class SalesforceAuthorization implements AuthorizationInterface
      * Get a access token from cache.
      *
      * @return null|AccessToken
+     * @throws InvalidArgumentException
      */
     protected function fetchAccessTokenFromCache(): ?AccessToken
     {
@@ -118,9 +118,6 @@ class SalesforceAuthorization implements AuthorizationInterface
             if ($this->cache !== null && $this->cache->has(static::CACHE_KEY)) {
                 return new AccessToken(json_decode($this->cache->get(static::CACHE_KEY), true));
             }
-        } catch (InvalidArgumentException $exception) {
-            // This will only occur when the cache key is not a legal value, proceed without cache
-            $this->cache = null;
         } catch (\InvalidArgumentException $exception) {
             // The cache will be corrected when the AccessToken is retrieved
         }

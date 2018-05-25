@@ -16,6 +16,7 @@ use GuzzleHttp\Psr7\Response;
 use PHPUnit\Framework\MockObject\MockObject;
 use PHPUnit\Framework\TestCase;
 use Psr\SimpleCache\CacheInterface;
+use Psr\SimpleCache\InvalidArgumentException;
 use Stevenmaguire\OAuth2\Client\Provider\Salesforce;
 use Stevenmaguire\OAuth2\Client\Token\AccessToken;
 
@@ -27,32 +28,40 @@ use Stevenmaguire\OAuth2\Client\Token\AccessToken;
 class SalesforceAuthorizationTest extends TestCase
 {
     /**
-     * @var string
+     * @var array
      */
-    protected $accessToken;
+    protected $accessToken = [];
+
+    /**
+     * @var array
+     */
+    protected $cacheContainer = [];
 
     /**
      * Store a json token response body.
      */
     public function setUp()
     {
-        $this->accessToken = json_encode([
+        $this->accessToken = [
             'instance_url' => 'https://user-3001.cloudforce.com',
             'id' => 'https://login.salesforce.com/id/00Db0000000bF1jN44/005b0000005jPFjAAM',
             'token_type' => 'Bearer',
             'issued_at' => strval(time()),
             'signature' => 'ODExMDQ5ODk5ODA=',
             'access_token' => '00Db0000000bHq1!Mu5eb70Rk_3Tc...',
-        ]);
+        ];
+        $this->accessToken['resource_owner_id'] = $this->accessToken['id'];
     }
 
     /**
      * Test the happy flow.
+     *
+     * @throws InvalidArgumentException
      */
     public function testAuthorization()
     {
+        $accessToken = new AccessToken($this->accessToken);
         $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-        $accessToken = new AccessToken(json_decode($this->accessToken, true));
         $request = new Request('GET', 'https://salesforce.com/services/data/v42.0/');
 
         $authorization = new SalesforceAuthorization($provider, 'user@org.salesforce.com', 'pass1234');
@@ -67,15 +76,19 @@ class SalesforceAuthorizationTest extends TestCase
     /**
      * Test the access token is stored in cache and re-used.
      *
-     * @throws \Psr\SimpleCache\InvalidArgumentException
+     * @throws InvalidArgumentException
      * @throws \ReflectionException
      */
-    public function testAuthorizationWithCache()
+    public function testAuthorizationWithEmptyCache()
     {
+        $accessToken = new AccessToken($this->accessToken);
         $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-        $accessToken = new AccessToken(json_decode($this->accessToken, true));
         $request = new Request('GET', 'https://salesforce.com/services/data/v42.0/');
+
         $cache = $this->getMockedCache();
+        $cache->expects(static::once())->method('has');
+        $cache->expects(static::never())->method('get');
+        $cache->expects(static::once())->method('set');
 
         $authorization = new SalesforceAuthorization($provider, 'user@org.salesforce.com', 'pass1234', $cache);
         $authRequest = $authorization->handle($request);
@@ -84,46 +97,35 @@ class SalesforceAuthorizationTest extends TestCase
         static::assertNotEquals($request->getUri()->getHost(), $authRequest->getUri()->getHost());
         static::assertContains($authRequest->getUri()->getHost(), $accessToken->getInstanceUrl());
         static::assertContains($accessToken->getToken(), $authRequest->getHeaderLine('Authorization'));
-        static::assertContains($accessToken->getToken(), $cache->get(SalesforceAuthorization::CACHE_KEY));
-
-        $cache->expects(static::once())->method('get');
-        $cache->expects(static::never())->method('set');
-
-        $authRequest = $authorization->handle($request);
-
-        static::assertContains($authRequest->getUri()->getHost(), $accessToken->getInstanceUrl());
-        static::assertContains($accessToken->getToken(), $authRequest->getHeaderLine('Authorization'));
+        static::assertSame(json_encode($accessToken), $this->cacheContainer[SalesforceAuthorization::CACHE_KEY]);
     }
 
     /**
      * Test access token is retrieved from cache.
      *
      * @throws \ReflectionException
+     * @throws InvalidArgumentException
      */
     public function testAuthorizationFromCache()
     {
+        $accessToken = new AccessToken($this->accessToken);
         $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-        $cache = $this->getMockedCache(
-            json_encode([
-                'instance_url' => 'https://user-3002.cloudforce.com',
-                'id' => 'https://login.salesforce.com/id/00Db0000000bF1nB9c/004b0000004pJn5AAZ',
-                'token_type' => 'Bearer',
-                'issued_at' => strval(time()),
-                'signature' => 'bjRHXHRzZjA=',
-                'access_token' => '00Db0000000bHa7!r4D10.h43d...',
-            ])
-        );
+        $request = new Request('GET', 'https://salesforce.com/services/data/v42.0/');
 
+        $cache = $this->getMockedCache(json_encode($accessToken));
+        $cache->expects(static::once())->method('has');
         $cache->expects(static::once())->method('get');
         $cache->expects(static::never())->method('set');
 
         $authorization = new SalesforceAuthorization($provider, 'user@org.salesforce.com', 'pass1234', $cache);
-        $authRequest = $authorization->handle(new Request('GET', 'https://salesforce.com/services/data/v42.0/'));
+        $authRequest = $authorization->handle($request);
 
-        static::assertSame('user-3002.cloudforce.com', $authRequest->getUri()->getHost());
-        static::assertContains('00Db0000000bHa7!r4D10.h43d...', $authRequest->getHeaderLine('Authorization'));
+        static::assertEmpty($request->getHeaderLine('Authorization'));
+        static::assertNotEquals($request->getUri()->getHost(), $authRequest->getUri()->getHost());
+        static::assertContains($authRequest->getUri()->getHost(), $accessToken->getInstanceUrl());
+        static::assertContains($accessToken->getToken(), $authRequest->getHeaderLine('Authorization'));
+        static::assertSame(json_encode($accessToken), $this->cacheContainer[SalesforceAuthorization::CACHE_KEY]);
     }
-
 
     /**
      * @dataProvider provideAuthorizationExceptions
@@ -132,6 +134,7 @@ class SalesforceAuthorizationTest extends TestCase
      * @expectedExceptionMessageRegExp ~Authentication failed: ~
      *
      * @param GuzzleException $exception
+     * @throws InvalidArgumentException
      */
     public function testAuthorizationFailed(GuzzleException $exception)
     {
@@ -155,71 +158,58 @@ class SalesforceAuthorizationTest extends TestCase
     }
 
     /**
-     * @throws \ReflectionException
-     */
-    public function testDisableIncompatibleCache()
-    {
-        $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-
-        /** @var CacheInterface|MockObject $cache */
-        $cache = static::getMockForAbstractClass(CacheInterface::class);
-        $cache->expects(static::once())
-            ->method('has')
-            ->willThrowException(new CacheException('Illegal cache key'));
-        $cache->expects(static::never())
-            ->method('set');
-
-        $authorization = new SalesforceAuthorization($provider, 'user@organisation.salesforce.com', 'pass1234', $cache);
-        $authorization->handle(new Request('GET', 'https://localhost'));
-
-        static::assertAttributeNotInstanceOf(CacheInterface::class, 'cache', $authorization);
-    }
-
-    /**
-     * Bit of an edge case; I would expect the cache::has to fail before the cache::set is called.
-     *
-     * @throws \ReflectionException
-     */
-    public function testDisableIncompatibleCacheOnStore()
-    {
-        $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-
-        /** @var CacheInterface|MockObject $cache */
-        $cache = static::getMockForAbstractClass(CacheInterface::class);
-        $cache->expects(static::once())
-            ->method('has')
-            ->willReturn(false);
-        $cache->expects(static::once())
-            ->method('set')
-            ->willThrowException(new CacheException('Illegal cache key'));
-
-        $authorization = new SalesforceAuthorization($provider, 'user@organisation.salesforce.com', 'pass1234', $cache);
-        $authorization->handle(new Request('GET', 'https://localhost'));
-
-        static::assertAttributeNotInstanceOf(CacheInterface::class, 'cache', $authorization);
-    }
-
-    /**
-     * @throws \Psr\SimpleCache\InvalidArgumentException
+     * @throws InvalidArgumentException
      * @throws \ReflectionException
      */
     public function testIgnoreAndOverwriteInvalidCacheToken()
     {
+        $accessToken = new AccessToken($this->accessToken);
         $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
-        $cache = $this->getMockedCache('{}');
+        $request = new Request('GET', 'https://salesforce.com/services/data/v42.0/');
 
-        static::assertArrayNotHasKey(
-            'access_token',
-            json_decode($cache->get(SalesforceAuthorization::CACHE_KEY), true)
-        );
+        $cache = $this->getMockedCache('{}');
+        $cache->expects(static::once())->method('has');
+        $cache->expects(static::once())->method('get');
+        $cache->expects(static::once())->method('set');
 
         $authorization = new SalesforceAuthorization($provider, 'user', 'pass', $cache);
-        $authorization->handle(new Request('GET', 'https://localhost'));
+        $authorization->handle($request);
 
-        static::assertArrayHasKey(
-            'access_token',
-            json_decode($cache->get(SalesforceAuthorization::CACHE_KEY), true)
-        );
+        static::assertSame(json_encode($accessToken), $this->cacheContainer[SalesforceAuthorization::CACHE_KEY]);
+    }
+
+    /**
+     * @dataProvider provideCacheMethods
+     *
+     * @expectedException \Psr\SimpleCache\InvalidArgumentException
+     * @expectedExceptionMessage Illegal cache key
+     *
+     * @param string $method
+     *
+     * @throws \ReflectionException
+     */
+    public function testCacheThrowsInvalidArgumentException(string $method = 'get')
+    {
+        $provider = $this->getMockedSalesforceProvider($this->getMockedHttpClient());
+
+        /** @var CacheInterface|MockObject $cache */
+        $cache = $this->getMockedCache();
+
+        if ($method === 'get') {
+            $cache = $this->getMockedCache('{}');
+        }
+
+        $cache->expects(static::once())
+            ->method($method)
+            ->willThrowException(new CacheException('Illegal cache key'));
+
+        $authorization = new SalesforceAuthorization($provider, 'user@org.salesforce.com', 'pass1234', $cache);
+        $authorization->handle(new Request('GET', 'https://localhost'));
+    }
+
+    public function provideCacheMethods(): array
+    {
+        return [['get'], ['set'], ['has']];
     }
 
     /**
@@ -242,16 +232,24 @@ class SalesforceAuthorizationTest extends TestCase
      */
     protected function getMockedHttpClient(): Client
     {
-        return
-            new Client(
-                [
-                    'handler' => HandlerStack::create(
-                        new MockHandler(
-                            [new Response(200, ['content-type' => 'application/json'], $this->accessToken)]
-                        )
-                    )
-                ]
-            );
+        $accessTokenResponse = json_encode(
+            array_filter(
+                $this->accessToken,
+                function ($key) {
+                    return $key !== 'resource_owner_id';
+                }
+            )
+        );
+
+        $handler = new MockHandler(
+            [
+                new Response(200, ['content-type' => 'application/json'], $accessTokenResponse),
+                new Response(500, [], 'Service Unavailable'),
+            ]
+        );
+        $handlerStack = HandlerStack::create($handler);
+
+        return new Client(['handler' => $handlerStack]);
     }
 
     /**
@@ -264,26 +262,27 @@ class SalesforceAuthorizationTest extends TestCase
      */
     protected function getMockedCache(string $currentValue = null)
     {
-        $cacheData = [];
+        $this->cacheContainer = [];
 
         if ($currentValue !== null) {
-            $cacheData[SalesforceAuthorization::CACHE_KEY] = $currentValue;
+            $this->cacheContainer[SalesforceAuthorization::CACHE_KEY] = $currentValue;
         }
 
         /** @var CacheInterface|MockObject $cache */
         $cache = static::getMockForAbstractClass(CacheInterface::class);
+
         $cache->expects(static::any())
             ->method('has')
             ->with(static::equalTo(SalesforceAuthorization::CACHE_KEY))
-            ->willReturnCallback(function () use (&$cacheData) {
-                return array_key_exists(SalesforceAuthorization::CACHE_KEY, $cacheData);
+            ->willReturnCallback(function () {
+                return array_key_exists(SalesforceAuthorization::CACHE_KEY, $this->cacheContainer);
             });
 
         $cache->expects(static::any())
             ->method('get')
             ->with(static::equalTo(SalesforceAuthorization::CACHE_KEY))
-            ->willReturnCallback(function () use (&$cacheData) {
-                return $cacheData[SalesforceAuthorization::CACHE_KEY];
+            ->willReturnCallback(function () {
+                return $this->cacheContainer[SalesforceAuthorization::CACHE_KEY];
             });
 
         $cache->expects(static::any())
@@ -291,8 +290,8 @@ class SalesforceAuthorizationTest extends TestCase
             ->with(
                 static::equalTo(SalesforceAuthorization::CACHE_KEY),
                 static::callback(
-                    function ($accessToken) use (&$cacheData) {
-                        $cacheData[SalesforceAuthorization::CACHE_KEY] = $accessToken;
+                    function ($accessToken) {
+                        $this->cacheContainer[SalesforceAuthorization::CACHE_KEY] = $accessToken;
 
                         return true;
                     }
